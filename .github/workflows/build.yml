@@ -1,0 +1,22 @@
+name: build-fastfetch-aarch64-musl
+on: workflow_dispatch
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Build in Alpine
+        run: |
+          mkdir out
+          docker run --rm -v "$PWD/out":/out alpine sh -c '
+            apk add build-base cmake git linux-headers &&
+            git clone --depth 1 https://github.com/fastfetch-cli/fastfetch &&
+            cd fastfetch &&
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXE_LINKER_FLAGS=-static &&
+            cmake --build build -j$(nproc) &&
+            cp build/fastfetch /out/
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fastfetch-aarch64-musl
+          path: out/fastfetch
