@@ -1,67 +1,52 @@
-name: weston-rootfs-aarch64-musl
+name: weston-bundle-aarch64-musl
 on: workflow_dispatch
 
 jobs:
   build:
     runs-on: ubuntu-24.04-arm   # free on public repos
     steps:
-      - name: Write helper files
+      - name: Write build script
         run: |
-          mkdir -p extra/usr/local/bin extra/root/.config
+          mkdir out
+          cat > build.sh << 'EOF'
+          set -e
+          PKGS="weston weston-backend-drm weston-shell-desktop xkeyboard-config eudev"
+          apk add $PKGS
 
-          cat > extra/enter.sh << 'EOF'
+          cat > /usr/local/bin/start-weston << 'EOS'
           #!/bin/sh
-          # Run from the host: sh /alpine/enter.sh
-          R="$(cd "$(dirname "$0")" && pwd)"
-          mount --rbind /dev "$R/dev"
-          mount -t proc proc "$R/proc"
-          mount -t sysfs sys "$R/sys"
-          mount -t tmpfs tmpfs "$R/run"
-          exec chroot "$R" /bin/sh -l
-          EOF
-
-          cat > extra/usr/local/bin/start-weston << 'EOF'
-          #!/bin/sh
-          mkdir -p /run/user/0 && chmod 700 /run/user/0
+          export PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
           export XDG_RUNTIME_DIR=/run/user/0
           export LIBSEAT_BACKEND=builtin
+          mkdir -p $XDG_RUNTIME_DIR && chmod 700 $XDG_RUNTIME_DIR
           udevd --daemon
           udevadm trigger
           udevadm settle
           exec weston --backend=drm --renderer=pixman
+          EOS
+          chmod +x /usr/local/bin/start-weston
+
+          cd /
+          : > /tmp/files
+          for p in $PKGS; do apk info -L $p | grep / >> /tmp/files; done
+          echo usr/local/bin/start-weston >> /tmp/files
+
+          # shared libs those files link against (skip musl libc itself)
+          for f in $(cat /tmp/files); do
+            [ -f "$f" ] && ldd "$f" 2>/dev/null
+          done | awk '/=>/ {print $3}' | grep -v musl | sed 's|^/||' >> /tmp/files
+          sort -u /tmp/files -o /tmp/files
+
+          tar -chzf /out/weston.tar.gz -T /tmp/files
           EOF
 
-          cat > extra/root/.config/weston.ini << 'EOF'
-          [core]
-          xwayland=true
-          EOF
-
-          chmod +x extra/enter.sh extra/usr/local/bin/start-weston
-
-      - name: Build rootfs in Alpine
+      - name: Build in Alpine
         run: |
-          mkdir out
           docker run --rm \
-            -v "$PWD/out":/out -v "$PWD/extra":/extra \
-            alpine sh -c '
-              set -e
-              REPO=https://dl-cdn.alpinelinux.org/alpine/latest-stable
-              apk add --root /rootfs --initdb --keys-dir /etc/apk/keys \
-                -X $REPO/main -X $REPO/community \
-                alpine-base weston weston-backend-drm weston-shell-desktop \
-                weston-terminal weston-clients weston-xwayland \
-                mesa-dri-gallium mesa-egl mesa-gbm \
-                seatd eudev font-dejavu xterm
-              mkdir -p /rootfs/etc/apk /rootfs/root
-              printf "%s\n" $REPO/main $REPO/community > /rootfs/etc/apk/repositories
-              echo "nameserver 1.1.1.1" > /rootfs/etc/resolv.conf
-              echo "bwa" > /rootfs/etc/hostname
-              cp -a /extra/. /rootfs/
-              mkdir -p /rootfs/dev /rootfs/proc /rootfs/sys /rootfs/run
-              tar -C /rootfs -czpf /out/rootfs.tar.gz .
-            '
+            -v "$PWD/out":/out -v "$PWD/build.sh":/build.sh \
+            alpine sh /build.sh
 
       - uses: actions/upload-artifact@v4
         with:
-          name: weston-rootfs-aarch64-musl
-          path: out/rootfs.tar.gz
+          name: weston-aarch64-musl
+          path: out/weston.tar.gz
