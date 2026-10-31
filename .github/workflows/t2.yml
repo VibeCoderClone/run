@@ -1,0 +1,67 @@
+name: weston-rootfs-aarch64-musl
+on: workflow_dispatch
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm   # free on public repos
+    steps:
+      - name: Write helper files
+        run: |
+          mkdir -p extra/usr/local/bin extra/root/.config
+
+          cat > extra/enter.sh << 'EOF'
+          #!/bin/sh
+          # Run from the host: sh /alpine/enter.sh
+          R="$(cd "$(dirname "$0")" && pwd)"
+          mount --rbind /dev "$R/dev"
+          mount -t proc proc "$R/proc"
+          mount -t sysfs sys "$R/sys"
+          mount -t tmpfs tmpfs "$R/run"
+          exec chroot "$R" /bin/sh -l
+          EOF
+
+          cat > extra/usr/local/bin/start-weston << 'EOF'
+          #!/bin/sh
+          mkdir -p /run/user/0 && chmod 700 /run/user/0
+          export XDG_RUNTIME_DIR=/run/user/0
+          export LIBSEAT_BACKEND=builtin
+          udevd --daemon
+          udevadm trigger
+          udevadm settle
+          exec weston --backend=drm --renderer=pixman
+          EOF
+
+          cat > extra/root/.config/weston.ini << 'EOF'
+          [core]
+          xwayland=true
+          EOF
+
+          chmod +x extra/enter.sh extra/usr/local/bin/start-weston
+
+      - name: Build rootfs in Alpine
+        run: |
+          mkdir out
+          docker run --rm \
+            -v "$PWD/out":/out -v "$PWD/extra":/extra \
+            alpine sh -c '
+              set -e
+              REPO=https://dl-cdn.alpinelinux.org/alpine/latest-stable
+              apk add --root /rootfs --initdb --keys-dir /etc/apk/keys \
+                -X $REPO/main -X $REPO/community \
+                alpine-base weston weston-backend-drm weston-shell-desktop \
+                weston-terminal weston-clients weston-xwayland \
+                mesa-dri-gallium mesa-egl mesa-gbm \
+                seatd eudev font-dejavu xterm
+              mkdir -p /rootfs/etc/apk /rootfs/root
+              printf "%s\n" $REPO/main $REPO/community > /rootfs/etc/apk/repositories
+              echo "nameserver 1.1.1.1" > /rootfs/etc/resolv.conf
+              echo "bwa" > /rootfs/etc/hostname
+              cp -a /extra/. /rootfs/
+              mkdir -p /rootfs/dev /rootfs/proc /rootfs/sys /rootfs/run
+              tar -C /rootfs -czpf /out/rootfs.tar.gz .
+            '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: weston-rootfs-aarch64-musl
+          path: out/rootfs.tar.gz
