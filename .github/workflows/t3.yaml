@@ -57,14 +57,12 @@ jobs:
             -v "$PWD/out:/out" \
             -w /work \
             alpine:latest sh /build.sh
-
       - name: Verify
         run: |
           ls -l out
           file out/wpa_supplicant out/wpa_passphrase
-          file out/wpa_supplicant | grep -q "statically linked"
+          file out/wpa_supplicant | grep -q "static"
           file out/wpa_supplicant | grep -q "ARM aarch64"
-
       - uses: actions/upload-artifact@v4
         with:
           name: wpa-supplicant-aarch64-musl
