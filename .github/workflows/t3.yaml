@@ -1,0 +1,52 @@
+name: build-wpa-supplicant
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "wpa_supplicant version"
+        default: "2.11"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Build static aarch64 musl binaries in Alpine
+        env:
+          WPA_VERSION: ${{ inputs.version || '2.11' }}
+        run: |
+          mkdir -p out
+          docker run --rm -e WPA_VERSION -v "$PWD/out:/out" alpine:latest sh -euxc '
+            apk add build-base linux-headers pkgconf libnl3-dev libnl3-static wget file
+            wget "https://w1.fi/releases/wpa_supplicant-${WPA_VERSION}.tar.gz"
+            tar xf "wpa_supplicant-${WPA_VERSION}.tar.gz"
+            cd "wpa_supplicant-${WPA_VERSION}/wpa_supplicant"
+            cat > .config <<EOF
+          CONFIG_DRIVER_NL80211=y
+          CONFIG_LIBNL32=y
+          CONFIG_TLS=internal
+          CONFIG_INTERNAL_LIBTOMMATH=y
+          CONFIG_CTRL_IFACE=y
+          CONFIG_IEEE80211W=y
+          CONFIG_IEEE80211N=y
+          CONFIG_IEEE80211AC=y
+          CONFIG_SAE=y
+          CONFIG_NO_RANDOM_POOL=y
+          EOF
+            make -j"$(nproc)" LDFLAGS="-static" CFLAGS="-Os"
+            strip wpa_supplicant wpa_passphrase
+            file wpa_supplicant wpa_passphrase
+            cp wpa_supplicant wpa_passphrase /out/
+          '
+
+      - name: Verify
+        run: |
+          file out/wpa_supplicant out/wpa_passphrase
+          file out/wpa_supplicant | grep -q "statically linked"
+          file out/wpa_supplicant | grep -q "ARM aarch64"
+          ls -l out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wpa-supplicant-aarch64-musl
+          path: out/
