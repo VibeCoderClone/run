@@ -40,9 +40,17 @@ jobs:
           #!/bin/sh
           set -eux
 
+          # coreutils provides GNU ln (iwd/ell's build uses `ln -t`, which BusyBox lacks)
           apk add --no-cache \
             build-base autoconf automake libtool pkgconf git file linux-headers \
+            coreutils \
             readline-dev ncurses-dev dbus-dev libnl3-dev
+
+          # make sure GNU ln is the one being used
+          if ! ln --version >/dev/null 2>&1; then
+            ln -sf /usr/bin/ln /bin/ln
+          fi
+          ln --version | head -1
 
           cd /work
           git clone --depth 1 --branch "$ELL_REF" https://git.kernel.org/pub/scm/libs/ell/ell.git
