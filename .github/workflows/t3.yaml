@@ -33,7 +33,7 @@ jobs:
           CONFIG_SAE=y
           CONFIG_NO_RANDOM_POOL=y
           EOF
-            make -j"$(nproc)" LDFLAGS="-static" CFLAGS="-Os"
+            CFLAGS="-Os" LDFLAGS="-static" make -j"$(nproc)"
             strip wpa_supplicant wpa_passphrase
             file wpa_supplicant wpa_passphrase
             cp wpa_supplicant wpa_passphrase /out/
