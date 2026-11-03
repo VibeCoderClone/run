@@ -40,13 +40,13 @@ jobs:
           #!/bin/sh
           set -eux
 
-          # coreutils provides GNU ln (iwd/ell's build uses `ln -t`, which BusyBox lacks)
+          # coreutils: GNU ln (iwd/ell build uses `ln -t`, BusyBox lacks it)
+          # dbus: daemon + uuidgen, bundled for the target
           apk add --no-cache \
             build-base autoconf automake libtool pkgconf git file linux-headers \
-            coreutils \
+            coreutils dbus \
             readline-dev ncurses-dev dbus-dev libnl3-dev
 
-          # make sure GNU ln is the one being used
           if ! ln --version >/dev/null 2>&1; then
             ln -sf /usr/bin/ln /bin/ln
           fi
@@ -61,7 +61,7 @@ jobs:
           OUT=/work/out
           mkdir -p "$OUT"
 
-          # iwd picks up ../ell and builds it in; no separate libell needed at runtime
+          # iwd picks up ../ell and builds it in
           cd /work/iwd
           ./bootstrap
           ./configure \
@@ -82,6 +82,25 @@ jobs:
           install -Dm644 wireless-regdb/regulatory.db     "$OUT/lib/firmware/regulatory.db"
           install -Dm644 wireless-regdb/regulatory.db.p7s "$OUT/lib/firmware/regulatory.db.p7s"
 
+          # ---- bundle dbus (daemon, uuidgen, config) ----
+          mkdir -p "$OUT/usr/bin" "$OUT/usr/share/dbus-1" "$OUT/etc/dbus-1"
+          cp -a /usr/bin/dbus-daemon /usr/bin/dbus-uuidgen /usr/bin/dbus-send "$OUT/usr/bin/"
+          cp -a /usr/share/dbus-1/. "$OUT/usr/share/dbus-1/"
+          cp -a /etc/dbus-1/. "$OUT/etc/dbus-1/" 2>/dev/null || true
+
+          # ---- bundle every shared lib the binaries need (except musl itself) ----
+          find "$OUT" -type f -perm -u+x ! -name '*.so*' > /tmp/bins
+          while read -r f; do
+            ldd "$f" 2>/dev/null || true
+          done < /tmp/bins \
+            | awk '/=>/ && $3 ~ /^\// && $3 !~ /ld-musl|libc\.musl/ {print $3}' \
+            | sort -u > /tmp/libs
+          while read -r lib; do
+            mkdir -p "$OUT$(dirname "$lib")"
+            cp -L "$lib" "$OUT$lib"
+          done < /tmp/libs
+          echo "== bundled libs =="; cat /tmp/libs
+
           {
             echo "alpine: $ALPINE_VERSION  musl: $(apk info -v musl)"
             echo "ell:   $(git -C ell rev-parse HEAD)"
@@ -93,9 +112,9 @@ jobs:
             (cd "$OUT" && find . -type f | sort)
             echo
             echo "== runtime libraries =="
-            for f in $(find "$OUT" -type f -perm -u+x ! -name '*.so*'); do
-              echo "--- $f"; file "$f" | cut -d: -f2; ldd "$f" 2>&1 || true
-            done
+            while read -r f; do
+              echo "--- $f"; ldd "$f" 2>&1 || true
+            done < /tmp/bins
           } | tee "$OUT/BUILDINFO.txt"
 
           tar -C "$OUT" -czf /work/iwd-aarch64-musl.tar.gz .
