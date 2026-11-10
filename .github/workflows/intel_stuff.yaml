@@ -23,7 +23,7 @@ jobs:
           for p in llvm10 clang10 beignet; do
             git clone https://aur.archlinux.org/$p.git
             cd $p
-            sed -i 's/python-recommonmark//g; s/python-sphinx//g' PKGBUILD
+            sed -i -E "s/['\"]?python-(recommonmark|sphinx)['\"]?//g" PKGBUILD
             sed -i 's/SPHINX=ON/SPHINX=OFF/g' PKGBUILD
             grep -n -i sphinx PKGBUILD || true
             makepkg -s --noconfirm --nocheck
