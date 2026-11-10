@@ -1,0 +1,34 @@
+name: build-beignet
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    timeout-minutes: 360
+    steps:
+      - name: Prepare
+        run: |
+          pacman -Syu --noconfirm git sudo
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+      - name: Build
+        run: |
+          cat > /home/builder/build.sh <<'EOF'
+          set -e
+          cd ~
+          cat >> ~/.makepkg.conf <<'CONF'
+          CXXFLAGS+=" -include cstdint -Wno-dangling-reference"
+          OPTIONS+=(!lto !debug)
+          CONF
+          for p in llvm10 clang10 beignet; do
+            git clone https://aur.archlinux.org/$p.git
+            (cd $p && makepkg -s --noconfirm --nocheck && sudo pacman -U --noconfirm *.pkg.tar.zst)
+          done
+          mkdir out && cp */*.pkg.tar.zst out/
+          EOF
+          chown builder /home/builder/build.sh
+          su builder -c "bash /home/builder/build.sh"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: /home/builder/out/*.pkg.tar.zst
