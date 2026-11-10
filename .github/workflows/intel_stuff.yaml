@@ -26,7 +26,11 @@ jobs:
             sed -i -E "s/['\"]?python-(recommonmark|sphinx)['\"]?//g" PKGBUILD
             sed -i 's/SPHINX=ON/SPHINX=OFF/g' PKGBUILD
             grep -n -i sphinx PKGBUILD || true
-            makepkg -s --noconfirm --nocheck
+            makepkg -s --noconfirm --nocheck > ~/$p.log 2>&1 || {
+              grep -m1 -A25 "FAILED:" ~/$p.log
+              tail -n 5 ~/$p.log
+              exit 1
+            }
             sudo pacman -U --noconfirm *.pkg.tar.zst
             cd ..
           done
@@ -35,6 +39,9 @@ jobs:
           chown builder /home/builder/build.sh
           su builder -c "bash /home/builder/build.sh"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: packages
-          path: /home/builder/out/*.pkg.tar.zst
+          path: |
+            /home/builder/out/*.pkg.tar.zst
+            /home/builder/*.log
