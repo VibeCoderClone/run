@@ -17,7 +17,7 @@ jobs:
           set -e
           cd ~
           cat >> ~/.makepkg.conf <<'CONF'
-          CXXFLAGS+=" -include cstdint -Wno-dangling-reference"
+          CXXFLAGS+=" -include cstdint -Wno-dangling-reference -std=gnu++14"
           OPTIONS+=(!lto !debug)
           CONF
           for p in llvm10 clang10 beignet; do
