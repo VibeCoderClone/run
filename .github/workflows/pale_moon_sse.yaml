@@ -48,7 +48,8 @@ jobs:
           export MOZ_PKG_SPECIAL=gtk3
           EOF
 
-          export CFLAGS="-Wno-implicit-int -Wno-incompatible-pointer-types -Wno-int-conversion"
+          export CFLAGS="-D_LARGEFILE64_SOURCE -Wno-implicit-int -Wno-incompatible-pointer-types -Wno-int-conversion"
+          export CXXFLAGS="-D_LARGEFILE64_SOURCE"
 
           ./mach build
           ./mach package
