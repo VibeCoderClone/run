@@ -16,6 +16,7 @@ jobs:
           set -eux
 
           apk add --no-cache bash build-base git python3 yasm nasm zip unzip xz perl \
+            m4 patch diffutils \
             linux-headers curl gtk+3.0-dev dbus-glib-dev alsa-lib-dev libxt-dev \
             pulseaudio-dev mesa-dev openssl-dev sqlite-dev bzip2-dev zlib-dev \
             libx11-dev libxcb-dev libxext-dev libxrender-dev libffi-dev \
