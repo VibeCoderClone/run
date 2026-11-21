@@ -26,6 +26,10 @@ jobs:
           cd /src
           git submodule init && git submodule update
           git checkout release && git submodule update
+          sed -i \
+            -e 's/PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP/PTHREAD_MUTEX_INITIALIZER/g' \
+            -e 's/PTHREAD_MUTEX_ADAPTIVE_NP/PTHREAD_MUTEX_NORMAL/g' \
+            platform/memory/mozjemalloc/jemalloc.c
 
           cat > .mozconfig <<'EOF'
           ac_add_options --enable-application=palemoon
