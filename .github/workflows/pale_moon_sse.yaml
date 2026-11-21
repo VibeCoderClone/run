@@ -1,0 +1,63 @@
+name: build-palemoon
+on: workflow_dispatch
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android
+
+      - name: Write build script
+        run: |
+          mkdir -p out
+          cat > build.sh <<'SCRIPT'
+          set -eux
+
+          apk add --no-cache bash build-base git python3 yasm nasm zip unzip xz perl \
+            linux-headers curl gtk+3.0-dev dbus-glib-dev alsa-lib-dev libxt-dev \
+            pulseaudio-dev mesa-dev openssl-dev sqlite-dev bzip2-dev zlib-dev \
+            libx11-dev libxcb-dev libxext-dev libxrender-dev libffi-dev \
+            freetype-dev fontconfig-dev
+
+          git clone https://repo.palemoon.org/MoonchildProductions/Pale-Moon.git /src
+          cd /src
+          git submodule init && git submodule update
+          git checkout release && git submodule update
+
+          cat > .mozconfig <<'EOF'
+          ac_add_options --enable-application=palemoon
+          ac_add_options --enable-optimize="-O2 -w -march=nehalem"
+          ac_add_options --enable-default-toolkit=cairo-gtk3
+          ac_add_options --enable-strip
+          ac_add_options --enable-devtools
+          ac_add_options --enable-av1
+          ac_add_options --disable-jemalloc
+          ac_add_options --disable-webrtc
+          ac_add_options --disable-gamepad
+          ac_add_options --disable-tests
+          ac_add_options --disable-debug
+          ac_add_options --disable-necko-wifi
+          ac_add_options --disable-updater
+          ac_add_options --with-pthreads
+          ac_add_options --x-libraries=/usr/lib
+          mk_add_options MOZ_MAKE_FLAGS="-j4"
+          export MOZ_PKG_SPECIAL=gtk3
+          EOF
+
+          export CFLAGS="-Wno-implicit-int -Wno-incompatible-pointer-types -Wno-int-conversion"
+
+          ./mach build
+          ./mach package
+
+          cp obj-*/dist/palemoon-*.tar.xz /work/out/
+          SCRIPT
+
+      - name: Build in Alpine (musl)
+        run: docker run --rm -v "$PWD:/work" alpine:3.24 sh /work/build.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: palemoon-musl-nehalem
+          path: out/*.tar.xz
