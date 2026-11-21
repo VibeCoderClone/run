@@ -29,12 +29,12 @@ jobs:
 
           cat > .mozconfig <<'EOF'
           ac_add_options --enable-application=palemoon
-          ac_add_options --enable-optimize="-O2 -w -march=nehalem"
+          ac_add_options --enable-optimize="-O2 -w -march=nehalem -mtune=generic -fno-plt" 
           ac_add_options --enable-default-toolkit=cairo-gtk3
           ac_add_options --enable-strip
           ac_add_options --enable-devtools
           ac_add_options --enable-av1
-          ac_add_options --disable-jemalloc
+          ac_add_options --enable-jemalloc
           ac_add_options --disable-webrtc
           ac_add_options --disable-gamepad
           ac_add_options --disable-tests
@@ -50,6 +50,7 @@ jobs:
 
           export CFLAGS="-D_LARGEFILE64_SOURCE -Wno-implicit-int -Wno-incompatible-pointer-types -Wno-int-conversion"
           export CXXFLAGS="-D_LARGEFILE64_SOURCE"
+          export LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,-z,stack-size=2097152"
 
           ./mach build
           ./mach package
