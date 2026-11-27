@@ -9,36 +9,71 @@ jobs:
       - name: Free disk space
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android
 
+      # Restore the newest ccache from any previous run
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: ccache-${{ github.run_id }}
+          restore-keys: |
+            ccache-
+
       - name: Write build script
         run: |
-          mkdir -p out
+          mkdir -p out .ccache
           cat > build.sh <<'SCRIPT'
-          set -eux
+          #!/bin/bash
+          set -u
+          LOG=/work/out/build.txt        # short summary, the important stuff
+          FULL=/work/out/build-full.log  # everything, gzipped at the end
+          NPROC=$(nproc)
+          mkdir -p /work/out
+          : > "$LOG"; : > "$FULL"
 
-          apk add --no-cache bash build-base git python3 yasm nasm zip unzip xz perl \
-            m4 patch diffutils \
+          section() { printf '\n===== %s =====\n' "$*" | tee -a "$LOG"; }
+          runlog()  { echo "\$ $1" >> "$LOG"; bash -c "$1" >> "$LOG" 2>&1; echo "[exit $?]" >> "$LOG"; }
+          finish()  {
+            section "FINISH (rc=$1)"
+            ccache -s >> "$LOG" 2>&1
+            gzip -f "$FULL"
+            exit "$1"
+          }
+
+          section "PACKAGES"
+          apk add --no-cache build-base git python3 yasm nasm zip unzip xz perl \
+            m4 patch diffutils ccache \
             linux-headers curl gtk+3.0-dev dbus-glib-dev alsa-lib-dev libxt-dev \
             pulseaudio-dev mesa-dev openssl-dev sqlite-dev bzip2-dev zlib-dev \
             libx11-dev libxcb-dev libxext-dev libxrender-dev libffi-dev \
-            freetype-dev fontconfig-dev
+            freetype-dev fontconfig-dev >> "$FULL" 2>&1 || { echo "apk failed" >> "$LOG"; finish 1; }
 
-          git clone https://repo.palemoon.org/MoonchildProductions/Pale-Moon.git /src
+          section "SYSTEM"
+          runlog 'uname -a; cat /etc/alpine-release; nproc; free -m; df -h /'
+          runlog 'gcc --version | head -1; ld --version | head -1; python3 --version; ccache --version | head -1'
+
+          section "SOURCE"
+          git clone --branch release --recurse-submodules --depth 1 \
+            https://repo.palemoon.org/MoonchildProductions/Pale-Moon.git /src >> "$FULL" 2>&1 || { echo "clone failed" >> "$LOG"; finish 1; }
           cd /src
-          git submodule init && git submodule update
-          git checkout release && git submodule update
+          runlog 'git log -1 --format="%H %cd %s"'
+          runlog 'git submodule status'
+
           sed -i \
             -e 's/PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP/PTHREAD_MUTEX_INITIALIZER/g' \
             -e 's/PTHREAD_MUTEX_ADAPTIVE_NP/PTHREAD_MUTEX_NORMAL/g' \
             platform/memory/mozjemalloc/jemalloc.c
+          runlog 'git diff --stat'
 
-          cat > .mozconfig <<'EOF'
+          # Unquoted heredoc so ${NPROC} expands. V=1 makes make print full compile commands.
+          cat > .mozconfig <<EOF
           ac_add_options --enable-application=palemoon
-          ac_add_options --enable-optimize="-O3 -w -march=nehalem -mtune=generic -fno-plt" 
+          ac_add_options --enable-optimize="-O2 -w -march=nehalem -mtune=haswell -fno-plt"
           ac_add_options --enable-default-toolkit=cairo-gtk3
           ac_add_options --enable-strip
           ac_add_options --enable-devtools
           ac_add_options --enable-av1
           ac_add_options --enable-jemalloc
+          ac_add_options --with-ccache=/usr/bin/ccache
           ac_add_options --disable-webrtc
           ac_add_options --disable-gamepad
           ac_add_options --disable-tests
@@ -48,24 +83,122 @@ jobs:
           ac_add_options --disable-npapi-gtk2
           ac_add_options --with-pthreads
           ac_add_options --x-libraries=/usr/lib
-          mk_add_options MOZ_MAKE_FLAGS="-j4"
+          mk_add_options MOZ_MAKE_FLAGS="-j${NPROC} V=1"
           export MOZ_PKG_SPECIAL=gtk3
           EOF
+          section ".mozconfig"
+          cat .mozconfig >> "$LOG"
 
-          export CFLAGS="-D_LARGEFILE64_SOURCE -Wno-implicit-int -Wno-incompatible-pointer-types -Wno-int-conversion"
-          export CXXFLAGS="-D_LARGEFILE64_SOURCE"
+          export CFLAGS="-O2 -march=nehalem -mtune=haswell -fno-plt -fomit-frame-pointer -D_LARGEFILE64_SOURCE -Wno-implicit-int -Wno-incompatible-pointer-types -Wno-int-conversion"
+          export CXXFLAGS="-O2 -march=nehalem -mtune=haswell -fno-plt -fomit-frame-pointer -D_LARGEFILE64_SOURCE"
           export LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,-z,stack-size=2097152"
 
-          ./mach build
-          ./mach package
+          # ccache setup (cache dir is mounted from the host so actions/cache can save it)
+          export CCACHE_DIR=/root/.ccache
+          export CCACHE_MAXSIZE=3G
+          export CCACHE_COMPRESS=1
+          export CCACHE_BASEDIR=/src
+          export CCACHE_NOHASHDIR=1
+          export CCACHE_SLOPPINESS=include_file_mtime,include_file_ctime,time_macros
+          export CCACHE_COMPILERCHECK="%compiler% -dumpfullversion -dumpmachine"
+          ccache -z >> "$LOG" 2>&1
 
-          cp obj-*/dist/palemoon-*.tar.xz /work/out/
+          section "ENV"
+          runlog 'env | grep -E "^(CFLAGS|CXXFLAGS|LDFLAGS|CCACHE_)" | sort'
+
+          section "CONFIGURE"
+          ./mach configure >> "$FULL" 2>&1
+          RC=$?
+          echo "[configure exit $RC]" >> "$LOG"
+          if [ $RC -ne 0 ]; then
+            tail -n 80 "$FULL" >> "$LOG"
+            finish $RC
+          fi
+
+          section "FLAGS FROM autoconf.mk (what configure actually decided)"
+          runlog "grep -E '^(CC|CXX|CFLAGS|CXXFLAGS|MOZ_OPTIMIZE_FLAGS|OS_CFLAGS|OS_CXXFLAGS|LDFLAGS|CCACHE)[[:space:]]*[:+]?=' obj-*/config/autoconf.mk"
+
+          section "BUILD"
+          SECONDS=0
+          ./mach build >> "$FULL" 2>&1
+          BRC=$?
+          echo "[build exit $BRC after ${SECONDS}s]" >> "$LOG"
+
+          if [ $BRC -ne 0 ]; then
+            section "BUILD ERRORS"
+            grep -nE 'error:|Error [0-9]+|\*\*\*' "$FULL" | head -60 >> "$LOG"
+            section "LAST 150 LINES"
+            tail -n 150 "$FULL" >> "$LOG"
+            finish $BRC
+          fi
+
+          section "OPTIMIZATION LEVEL OF EVERY COMPILE (last -O flag per command)"
+          {
+            echo "C files:"
+            awk '/ -c / && /\.c( |$)/ { o="none"; for(i=1;i<=NF;i++) if ($i ~ /^-O/) o=$i; c[o]++ } END { for (k in c) print "  " c[k], k }' "$FULL"
+            echo "C++ files:"
+            awk '/ -c / && /\.(cpp|cc)( |$)/ { o="none"; for(i=1;i<=NF;i++) if ($i ~ /^-O/) o=$i; c[o]++ } END { for (k in c) print "  " c[k], k }' "$FULL"
+          } >> "$LOG"
+
+          section "SAMPLE COMPILE COMMANDS"
+          for pat in 'jemalloc\.c' 'pixman-[a-z0-9-]*\.c' 'sqlite3\.c' 'cairo-[a-z0-9-]*\.c'; do
+            echo "--- $pat" >> "$LOG"
+            grep -m1 -E " -c .*${pat}" "$FULL" | cut -c1-900 >> "$LOG" || true
+            [ "${PIPESTATUS[0]}" -eq 0 ] || echo "(no match)" >> "$LOG"
+          done
+
+          section "PACKAGE"
+          ./mach package >> "$FULL" 2>&1
+          PRC=$?
+          echo "[package exit $PRC]" >> "$LOG"
+          if [ $PRC -ne 0 ]; then
+            tail -n 100 "$FULL" >> "$LOG"
+            finish $PRC
+          fi
+
+          runlog 'ls -la obj-*/dist/bin/liblgpllibs.so obj-*/dist/bin/libxul.so obj-*/dist/palemoon-*.tar.xz'
+          runlog 'tar -tJf obj-*/dist/palemoon-*.tar.xz | grep -E "liblgpllibs|libxul|dependentlibs"'
+          if ! tar -tJf obj-*/dist/palemoon-*.tar.xz | grep -q 'liblgpllibs\.so'; then
+            echo "WARNING: liblgpllibs.so is NOT in the tarball" >> "$LOG"
+          fi
+
+          cp obj-*/dist/palemoon-*.tar.xz /work/out/ || { echo "cp failed" >> "$LOG"; finish 1; }
+          finish 0
           SCRIPT
 
       - name: Build in Alpine (musl)
-        run: docker run --rm -v "$PWD:/work" alpine:3.24 sh /work/build.sh
+        run: |
+          docker run --rm \
+            -v "$PWD:/work" \
+            -v "$PWD/.ccache:/root/.ccache" \
+            alpine:3.24 sh -c 'apk add --no-cache bash >/dev/null && bash /work/build.sh'
 
-      - uses: actions/upload-artifact@v4
+      # Docker wrote these as root; fix ownership so cache/upload can read them
+      - name: Fix ownership
+        if: always()
+        run: sudo chown -R "$USER:$USER" .ccache out || true
+
+      # Save the cache even when the build fails, so the next run resumes where it died
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: ccache-${{ github.run_id }}
+
+      - name: Upload logs (build.txt + full log)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            out/build.txt
+            out/build-full.log.gz
+          if-no-files-found: warn
+
+      - name: Upload Pale Moon
+        uses: actions/upload-artifact@v4
         with:
           name: palemoon-musl-nehalem
           path: out/*.tar.xz
+          if-no-files-found: error
